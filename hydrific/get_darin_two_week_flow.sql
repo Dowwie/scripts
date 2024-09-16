@@ -1,4 +1,5 @@
 COPY (
+    -- we don't want to cut the first segment off so we gracefully handle that in this logic
   WITH start_point AS (
     SELECT timestamp AS start_timestamp
     FROM (
