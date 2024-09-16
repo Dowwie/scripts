@@ -41,9 +41,16 @@ establish_ssh_tunnel() {
 	local ssh_keyfile=$5
 	local bastion_host=$6
 
+	# Start SSH in background, and capture its PID
 	ssh -v -i "${ssh_keyfile}" -L "${local_port}:${remote_host}:${remote_port}" "${ssh_user}@${bastion_host}" -N -f
-	if [ $? -eq 0 ]; then
-		echo $!
+
+	# Wait for a bit to ensure the tunnel is established
+	sleep 1
+
+	# Capture the actual PID of the background SSH process
+	SSH_PID=$(pgrep -f "ssh -v -i ${ssh_keyfile} -L ${local_port}:${remote_host}:${remote_port}")
+	if [ -n "$SSH_PID" ]; then
+		echo "$SSH_PID"
 	else
 		return 1
 	fi
@@ -90,7 +97,7 @@ DB_DATABASE=$(echo "${DB_URL}" | cut -d '?' -f 1 | cut -d '/' -f 4)
 
 SSH_USER=darin
 SSH_KEYFILE=/Users/gordond/.ssh/bastion_prod_ed25519
-BASTION_HOST=ec2-18-234-229-182.compute-1.amazonaws.com
+BASTION_HOST=ec2-184-72-197-105.compute-1.amazonaws.com
 
 # Try to establish SSH tunnel
 max_attempts=5
