@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+AWS_PROFILE="prod-admin"
+DB_URL=$(aws secretsmanager get-secret-value --profile "${AWS_PROFILE}" --secret-id "hydrific-production-hydrific_db_url" --query SecretString --output text)
+DB_HOST=$(echo "${DB_URL}" | cut -d@ -f2- | cut -d/ -f1 | cut -d: -f1)
+DB_PORT=$(echo "${DB_URL}" | cut -d@ -f2- | cut -d/ -f1 | cut -d: -f2)
+DB_USER=$(echo "${DB_URL}" | cut -d@ -f1- | cut -d: -f2 | sed 's/^\/\///')
+DB_PW=$(echo "${DB_URL}" | cut -d '@' -f 1 | cut -d ':' -f 3)
+DB_DATABASE=$(echo "${DB_URL}" | cut -d '?' -f 1 | cut -d '/' -f 4)
+SSH_USER=darin
+SSH_KEYFILE=/Users/gordond/.ssh/bastion_prod_ed25519
+BASTION_HOST=ec2-18-234-229-182.compute-1.amazonaws.com
+
+# Establish an SSH tunnel to the bastion host and forward the database port
+ssh -v -i "${SSH_KEYFILE}" -L 5433:"${DB_HOST}":"${DB_PORT}" "${SSH_USER}@${BASTION_HOST}" -N &
+SSH_PID=$!
+
+# Wait for the SSH tunnel to be established
+sleep 5
+
+cat <<EOF >temp_query.sql
+SET timescaledb.enable_tiered_reads = true;
+COPY (
+select id, to_char(timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US') as timestamp, annotation
+  from tag
+ where level = 1
+AND EXTRACT(YEAR FROM timestamp) = 2024
+and annotation in ('Toilet', 'Faucet', 'Shower')
+and EXTRACT(MONTH FROM timestamp) not in (1,2)
+and device_id not in ('56324222-70b0-49b8-83e4-4c44e02367df'::uuid, '99bf8a1b-33e7-4ccd-9c53-8ecb8660588d'::uuid)
+) TO STDOUT WITH (FORMAT CSV, DELIMITER '|', NULL '¤');
+SET timescaledb.enable_tiered_reads = false;
+EOF
+
+# Execute the SQL commands and save only the COPY output
+PGPASSWORD="${DB_PW}" psql -h localhost -p 5433 -U "${DB_USER}" -d "${DB_DATABASE}" \
+	-v ON_ERROR_STOP=1 \
+	--no-psqlrc \
+	--pset pager=off \
+	--quiet \
+	--tuples-only \
+	-f temp_query.sql >tag_info.csv
+
+# Remove the temporary SQL file
+rm temp_query.sql
+
+# Close the SSH tunnel
+kill $SSH_PID
